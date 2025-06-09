@@ -1,5 +1,6 @@
 """Try out the refinery module."""
 
+import asyncio
 from typing import Any
 
 import dspy
@@ -43,6 +44,10 @@ class QAModule(Predictor[QA]):
         result = self.predictor(**input.toDict())
         return Answer(answer=result.answer)
 
+    async def aforward(self, input: Question) -> Answer:
+        result = await self.predictor.acall(**input.toDict())
+        return Answer(answer=result.answer)
+
 
 class QAFeedback(FeedbackModule[QA]):
     def forward(self, input: Question, output: Answer, _trace=None) -> Feedback:
@@ -52,12 +57,21 @@ class QAFeedback(FeedbackModule[QA]):
             )
         return Feedback(evaluation=1.0, feedback=None)
 
+    async def aforward(self, input: Question, output: Answer, _trace=None) -> Feedback:
+        return self.forward(input=input, output=output, _trace=_trace)
+
+
+async def sample(dataset: list[dspy.Example], module: dspy.Module):
+    for ex in dataset:
+        result = await module.acall(**ex.inputs().toDict())
+        print(f"{ex} -> {result}")
+
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["eval", "opt"])
+    parser.add_argument("mode", choices=["eval", "opt", "sample"])
     parser.add_argument("--retry", action=argparse._StoreTrueAction, default=False)
     parser.add_argument("--load", help="Path to load the model from")
     parser.add_argument("--trace", action=argparse._StoreTrueAction, default=False)
@@ -115,6 +129,8 @@ if __name__ == "__main__":
                 optimized: dspy.Module = tp.compile(module, trainset=trainset)
                 print(optimized)
                 optimized.save(path="optimized.json")
+            case "sample":
+                asyncio.run(sample(dataset=trainset, module=module))
         if args.trace:
             print("Trace")
             for i, el in enumerate(dspy.settings.trace):

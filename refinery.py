@@ -4,7 +4,6 @@ import contextlib
 from typing import Any, Optional, Self
 
 import dspy
-from dspy.adapters.base import Adapter
 
 
 class Output[T: dspy.Signature](dspy.Prediction):
@@ -40,10 +39,13 @@ class FeedbackModule[T: dspy.Signature](dspy.Module):
         raise NotImplementedError()
 
     def __call__(self, input: Input[T], output: Output[T], _trace=None) -> Feedback:
-        trace = dspy.settings.trace
-        feedback = self.forward(input=input, output=output)
-        trace.append((self, {"input": input, "output": output}, feedback))
-        return feedback
+        return self.forward(input=input, output=output)
+
+    async def aforward(self, input: Input[T], output: Output[T]) -> Feedback:
+        raise NotImplementedError()
+
+    async def acall(self, input: Input[T], output: Output[T], _trace=None) -> Feedback:
+        return self.aforward(input=input, output=output)
 
 
 class Validation[T: dspy.Signature](dspy.Module):
@@ -66,6 +68,13 @@ class Validation[T: dspy.Signature](dspy.Module):
     def __call__(self, input: Input[T], output: Output[T]) -> bool:
         return self.forward(input=input, output=output)
 
+    async def aforward(self, input: Input[T], output: Output[T]) -> bool:
+        feedback = await self.feedback_module.acall(input=input, output=output)
+        return feedback.evaluation >= self.validation_threshold
+
+    async def acall(self, input: Input[T], output: Output[T]) -> bool:
+        return await self.aforward(input=input, output=output)
+
 
 class Predictor[T: dspy.Signature](dspy.Module):
     """A module that is capable of fulfilling a signature."""
@@ -87,11 +96,22 @@ class Predictor[T: dspy.Signature](dspy.Module):
             )
         return self.forward(input=input)
 
+    async def aforward(self, input: Input[T]) -> Output[T]:
+        return NotImplementedError()
 
-class RetryAdapter(Adapter):
+    async def acall(self, input: Input[T]) -> Output[T]:
+        output = await self.aforward(input=input)
+        if self.validation:
+            assert await self.validation.acall(input=input, output=output), (
+                "Output failed to pass validation"
+            )
+        return self.forward(input=input)
+
+
+class RetryAdapter(dspy.Adapter):
     """An adapter that adds a hint argument based on the received feedback."""
 
-    def __init__(self, adapter: Adapter, feedback: str):
+    def __init__(self, adapter: dspy.Adapter, feedback: str):
         super().__init__()
         self.adapter = adapter
         self.feedback = feedback
@@ -101,6 +121,14 @@ class RetryAdapter(Adapter):
             "hint_", dspy.InputField(desc="A hint to the module from an earlier run")
         )
         return self.adapter(
+            lm, lm_kwargs, modified_signature, demos, inputs | {"hint_": self.feedback}
+        )
+
+    async def acall(self, lm, lm_kwargs, signature, demos, inputs):
+        modified_signature = signature.append(
+            "hint_", dspy.InputField(desc="A hint to the module from an earlier run")
+        )
+        return await self.adapter.acall(
             lm, lm_kwargs, modified_signature, demos, inputs | {"hint_": self.feedback}
         )
 
@@ -142,6 +170,17 @@ class Retrier[T: dspy.Signature](dspy.Module):
             with self.retry_context(feedback=feedback.feedback if feedback else None):
                 output = self.module(input=input)
             feedback = self.feedback_module(input=input, output=output)
+            if feedback.evaluation >= self.threshold:
+                return output
+        raise RuntimeError("Could not obtain proper result")
+
+    async def aforward(self, input: Input[T]) -> Output[T]:
+        """Retry the module until the output meets the threshold."""
+        feedback: Optional[Feedback] = None
+        for _ in range(self.N):
+            with self.retry_context(feedback=feedback.feedback if feedback else None):
+                output = await self.module.acall(input=input)
+            feedback = await self.feedback_module.acall(input=input, output=output)
             if feedback.evaluation >= self.threshold:
                 return output
         raise RuntimeError("Could not obtain proper result")
