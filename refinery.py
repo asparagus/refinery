@@ -4,11 +4,7 @@ import contextlib
 from typing import Any, Optional, Self
 
 import dspy
-import litellm
 from dspy.adapters.base import Adapter
-
-
-litellm.print_verbose = True
 
 
 class Output[T: dspy.Signature](dspy.Prediction):
