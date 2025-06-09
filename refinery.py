@@ -43,7 +43,7 @@ class FeedbackModule[T: dspy.Signature](dspy.Module):
     def forward(self, input: Input[T], output: Output[T]) -> Feedback:
         raise NotImplementedError()
 
-    def __call__(self, input: Input[T], output: Output[T], _trace = None) -> Feedback:
+    def __call__(self, input: Input[T], output: Output[T], _trace=None) -> Feedback:
         trace = dspy.settings.trace
         feedback = self.forward(input=input, output=output)
         trace.append((self, {"input": input, "output": output}, feedback))
@@ -74,7 +74,9 @@ class Validation[T: dspy.Signature](dspy.Module):
 class Predictor[T: dspy.Signature](dspy.Module):
     """A module that is capable of fulfilling a signature."""
 
-    def __init__(self, validation: Validation[T] | None = None, callbacks: Any | None = None):
+    def __init__(
+        self, validation: Validation[T] | None = None, callbacks: Any | None = None
+    ):
         super().__init__(callbacks=callbacks)
         self.validation = validation
 
@@ -84,7 +86,9 @@ class Predictor[T: dspy.Signature](dspy.Module):
     def __call__(self, input: Input[T]) -> Output[T]:
         output = self.forward(input=input)
         if self.validation:
-            assert self.validation(input=input, output=output), "Output failed to pass validation"
+            assert self.validation(input=input, output=output), (
+                "Output failed to pass validation"
+            )
         return self.forward(input=input)
 
 
@@ -100,7 +104,9 @@ class RetryAdapter(Adapter):
         modified_signature = signature.append(
             "hint_", dspy.InputField(desc="A hint to the module from an earlier run")
         )
-        return self.adapter(lm, lm_kwargs, modified_signature, demos, inputs | {"hint_": self.feedback})
+        return self.adapter(
+            lm, lm_kwargs, modified_signature, demos, inputs | {"hint_": self.feedback}
+        )
 
 
 class Retrier[T: dspy.Signature](dspy.Module):
@@ -132,7 +138,7 @@ class Retrier[T: dspy.Signature](dspy.Module):
                 feedback=feedback,
             ),
         )
-        
+
     def forward(self, input: Input[T]) -> Output[T]:
         """Retry the module until the output meets the threshold."""
         feedback: Optional[Feedback] = None
